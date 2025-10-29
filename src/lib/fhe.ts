@@ -8,6 +8,7 @@ declare global {
       SepoliaConfig: Record<string, unknown>;
     };
     ethereum?: any;
+    okxwallet?: any;
   }
 }
 
@@ -26,12 +27,23 @@ export const initializeFHE = async (provider?: any) => {
     );
   }
 
-  // Get Ethereum provider
-  const ethereumProvider = provider || window.ethereum;
+  // Get Ethereum provider from multiple sources
+  // Priority: passed provider > window.ethereum > window.okxwallet > window.coinbaseWalletExtension
+  const ethereumProvider = provider ||
+    window.ethereum ||
+    (window as any).okxwallet?.provider ||
+    (window as any).okxwallet ||
+    (window as any).coinbaseWalletExtension;
 
   if (!ethereumProvider) {
     throw new Error('Ethereum provider not found. Please connect your wallet first.');
   }
+
+  console.log('🔌 Using Ethereum provider:', {
+    isOKX: !!(window as any).okxwallet,
+    isMetaMask: !!(window.ethereum as any)?.isMetaMask,
+    provider: ethereumProvider
+  });
 
   const sdk = window.relayerSDK;
   await sdk.initSDK();
