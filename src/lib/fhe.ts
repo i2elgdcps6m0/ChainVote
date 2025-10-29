@@ -1,28 +1,51 @@
+import { hexlify, getAddress } from "ethers";
+
 declare global {
   interface Window {
-    FHE: any;
+    relayerSDK?: {
+      initSDK: () => Promise<void>;
+      createInstance: (config: Record<string, unknown>) => Promise<any>;
+      SepoliaConfig: Record<string, unknown>;
+    };
+    ethereum?: any;
   }
 }
 
 let fheInstance: any = null;
 
-export const initializeFHE = async () => {
+export const initializeFHE = async (provider?: any) => {
   if (fheInstance) return fheInstance;
 
-  if (!window.FHE) {
+  if (typeof window === 'undefined') {
+    throw new Error('FHE SDK requires browser environment');
+  }
+
+  if (!window.relayerSDK) {
     throw new Error(
       "Zama FHE SDK not loaded. Make sure the SDK script is included in index.html"
     );
   }
 
-  fheInstance = window.FHE;
-  return fheInstance;
-};
+  // Get Ethereum provider
+  const ethereumProvider = provider || window.ethereum;
 
-export const toHex = (buffer: Uint8Array): `0x${string}` => {
-  return `0x${Array.from(buffer)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("")}`;
+  if (!ethereumProvider) {
+    throw new Error('Ethereum provider not found. Please connect your wallet first.');
+  }
+
+  const sdk = window.relayerSDK;
+  await sdk.initSDK();
+
+  // Use the built-in SepoliaConfig from the SDK
+  const config = {
+    ...sdk.SepoliaConfig,
+    network: ethereumProvider,
+  };
+
+  fheInstance = await sdk.createInstance(config);
+  console.log('✅ FHE instance initialized for Sepolia');
+
+  return fheInstance;
 };
 
 /**
@@ -35,22 +58,21 @@ export const toHex = (buffer: Uint8Array): `0x${string}` => {
 export const encryptVote = async (
   voteValue: bigint,
   contractAddress: string,
-  userAddress: string
+  userAddress: string,
+  provider?: any
 ): Promise<{
   encryptedVote: `0x${string}`;
   proof: `0x${string}`;
 }> => {
-  const fhe = await initializeFHE();
+  const fhe = await initializeFHE(provider);
+  const checksumAddress = getAddress(contractAddress);
 
-  const checksumContract = contractAddress.toLowerCase() as `0x${string}`;
-  const checksumUser = userAddress.toLowerCase() as `0x${string}`;
-
-  const input = fhe.createEncryptedInput(checksumContract, checksumUser);
+  const input = fhe.createEncryptedInput(checksumAddress, userAddress);
   input.add64(voteValue); // euint64 for vote value
-  const result = await input.encrypt();
+  const { handles, inputProof } = await input.encrypt();
 
   return {
-    encryptedVote: toHex(result.handles[0]),
-    proof: toHex(result.inputProof),
+    encryptedVote: hexlify(handles[0]) as `0x${string}`,
+    proof: hexlify(inputProof) as `0x${string}`,
   };
 };

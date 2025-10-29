@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
-import { useAccount } from "wagmi";
+import { useAccount, usePublicClient } from "wagmi";
 import { Header } from "@/components/Header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -19,6 +19,7 @@ const VoteDetail = () => {
   const { id } = useParams();
   const { address, isConnected } = useAccount();
   const { writeContractAsync } = useWriteContract();
+  const publicClient = usePublicClient();
 
   const proposalId = id ? BigInt(id) : undefined;
 
@@ -98,10 +99,12 @@ const VoteDetail = () => {
     setIsVoting(true);
 
     try {
+      toast.info("Initializing FHE encryption...");
       await initializeFHE();
 
       const choiceId = BigInt(selectedOption);
 
+      toast.info("Encrypting your vote...");
       // Encrypt vote value of 1
       const { encryptedVote: encVote, proof } = await encryptVote(
         1n,
@@ -109,6 +112,7 @@ const VoteDetail = () => {
         address!
       );
 
+      toast.info("Submitting encrypted vote...");
       const hash = await writeContractAsync({
         address: CONTRACTS.ChainVote,
         abi: ABIS.ChainVote,
@@ -116,13 +120,27 @@ const VoteDetail = () => {
         args: [proposalId!, choiceId, encVote, proof],
       });
 
-      toast.success("Vote encrypted and submitted successfully!");
       console.log("Transaction hash:", hash);
+      toast.info("Waiting for transaction confirmation...");
 
-      // Refetch hasVoted status
-      setTimeout(() => {
-        refetchHasVoted();
-      }, 2000);
+      // Wait for transaction to be confirmed
+      const receipt = await publicClient!.waitForTransactionReceipt({
+        hash,
+        confirmations: 1
+      });
+
+      console.log("Transaction confirmed:", receipt);
+
+      if (receipt.status === "success") {
+        toast.success("Vote encrypted and submitted successfully!");
+        // Refetch hasVoted status
+        setTimeout(() => {
+          refetchHasVoted();
+          refetchInfo();
+        }, 2000);
+      } else {
+        toast.error("Transaction failed");
+      }
     } catch (error: any) {
       console.error("Error casting vote:", error);
       toast.error(error.message || "Failed to cast vote");
@@ -140,6 +158,8 @@ const VoteDetail = () => {
     setIsRequestingDecryption(true);
 
     try {
+      toast.info("Submitting decryption request...");
+
       const hash = await writeContractAsync({
         address: CONTRACTS.ChainVote,
         abi: ABIS.ChainVote,
@@ -147,17 +167,31 @@ const VoteDetail = () => {
         args: [proposalId!],
       });
 
-      toast.success("Decryption requested! Results will be available soon.");
       console.log("Transaction hash:", hash);
+      toast.info("Waiting for transaction confirmation...");
 
-      // Poll for results
-      const pollInterval = setInterval(() => {
-        refetchResults();
-        refetchInfo();
-      }, 3000);
+      // Wait for transaction to be confirmed
+      const receipt = await publicClient!.waitForTransactionReceipt({
+        hash,
+        confirmations: 1
+      });
 
-      // Stop polling after 60 seconds
-      setTimeout(() => clearInterval(pollInterval), 60000);
+      console.log("Transaction confirmed:", receipt);
+
+      if (receipt.status === "success") {
+        toast.success("Decryption requested! Results will be available soon.");
+
+        // Poll for results
+        const pollInterval = setInterval(() => {
+          refetchResults();
+          refetchInfo();
+        }, 3000);
+
+        // Stop polling after 60 seconds
+        setTimeout(() => clearInterval(pollInterval), 60000);
+      } else {
+        toast.error("Transaction failed");
+      }
     } catch (error: any) {
       console.error("Error requesting decryption:", error);
       toast.error(error.message || "Failed to request decryption");

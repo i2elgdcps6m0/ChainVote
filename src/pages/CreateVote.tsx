@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAccount } from "wagmi";
+import { useAccount, usePublicClient } from "wagmi";
 import { Header } from "@/components/Header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -16,6 +16,7 @@ const CreateVote = () => {
   const navigate = useNavigate();
   const { address, isConnected } = useAccount();
   const { createProposal, proposalFee } = useChainVote();
+  const publicClient = usePublicClient();
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -87,6 +88,8 @@ const CreateVote = () => {
     setIsCreating(true);
 
     try {
+      toast.info("Submitting transaction...");
+
       const hash = await createProposal(
         title,
         description,
@@ -95,10 +98,23 @@ const CreateVote = () => {
         votingEnd
       );
 
-      toast.success("Proposal created successfully with FHE encryption!");
       console.log("Transaction hash:", hash);
+      toast.info("Waiting for transaction confirmation...");
 
-      setTimeout(() => navigate("/"), 2000);
+      // Wait for transaction to be confirmed
+      const receipt = await publicClient!.waitForTransactionReceipt({
+        hash,
+        confirmations: 1
+      });
+
+      console.log("Transaction confirmed:", receipt);
+
+      if (receipt.status === "success") {
+        toast.success("Proposal created successfully with FHE encryption!");
+        setTimeout(() => navigate("/"), 2000);
+      } else {
+        toast.error("Transaction failed");
+      }
     } catch (error: any) {
       console.error("Error creating proposal:", error);
       toast.error(error.message || "Failed to create proposal");
