@@ -18,7 +18,7 @@ let initPromise: Promise<any> | null = null;
 /**
  * Initialize FHE SDK with timeout and retry logic
  */
-export const initializeFHE = async (provider?: any, timeoutMs: number = 30000) => {
+export const initializeFHE = async (provider?: any, timeoutMs: number = 90000) => {
   // Return existing instance
   if (fheInstance) {
     console.log('🔄 Reusing existing FHE instance');
@@ -105,7 +105,7 @@ export const encryptVote = async (
   contractAddress: string,
   userAddress: string,
   provider?: any,
-  timeoutMs: number = 45000
+  timeoutMs: number = 60000
 ): Promise<{
   encryptedVote: `0x${string}`;
   proof: `0x${string}`;
