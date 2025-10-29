@@ -13,13 +13,17 @@ import { toast } from "sonner";
 import { useProposalInfo, useProposalResults, useHasVoted } from "@/hooks/useChainVote";
 import { useWriteContract } from "wagmi";
 import { CONTRACTS, ABIS } from "@/config/contracts";
-import { encryptVote, initializeFHE } from "@/lib/fhe";
+import { useFHE, encryptVoteWithInstance } from "@/hooks/useFHE";
+import { getAddress } from "ethers";
 
 const VoteDetail = () => {
   const { id } = useParams();
   const { address, isConnected } = useAccount();
   const { writeContractAsync } = useWriteContract();
   const publicClient = usePublicClient();
+
+  // Use FHE hook following official pattern
+  const { instance: fheInstance, status: fheStatus, error: fheError } = useFHE();
 
   const proposalId = id ? BigInt(id) : undefined;
 
@@ -96,19 +100,31 @@ const VoteDetail = () => {
       return;
     }
 
+    // Check FHE instance status
+    if (fheStatus === 'loading') {
+      toast.error("FHE is initializing, please wait...");
+      return;
+    }
+
+    if (fheStatus === 'error' || !fheInstance) {
+      toast.error("FHE initialization failed. Please refresh the page.");
+      console.error("FHE error:", fheError);
+      return;
+    }
+
     setIsVoting(true);
 
     try {
-      toast.info("Initializing FHE encryption...");
-      await initializeFHE();
-
       const choiceId = BigInt(selectedOption);
 
-      toast.info("Encrypting your vote...");
-      // Encrypt vote value of 1
-      const { encryptedVote: encVote, proof } = await encryptVote(
+      toast.info("Encrypting your vote with FHE...");
+      const checksumAddress = getAddress(CONTRACTS.ChainVote);
+
+      // Use FHE instance to encrypt vote
+      const { encryptedVote: encVote, proof } = await encryptVoteWithInstance(
+        fheInstance,
         1n,
-        CONTRACTS.ChainVote,
+        checksumAddress,
         address!
       );
 
@@ -266,6 +282,31 @@ const VoteDetail = () => {
             </Card>
           </div>
 
+          {/* FHE Status Indicator */}
+          {status === "active" && !hasVoted && (
+            <div className="mb-4">
+              {fheStatus === 'loading' && (
+                <div className="flex items-center gap-2 p-3 rounded-lg bg-blue-500/10 border border-blue-500/30">
+                  <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
+                  <span className="text-sm text-blue-500">Initializing FHE encryption system...</span>
+                </div>
+              )}
+              {fheStatus === 'ready' && (
+                <div className="flex items-center gap-2 p-3 rounded-lg bg-green-500/10 border border-green-500/30">
+                  <Shield className="w-4 h-4 text-green-500" />
+                  <span className="text-sm text-green-500">FHE encryption ready</span>
+                </div>
+              )}
+              {fheStatus === 'error' && (
+                <div className="flex items-center gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/30">
+                  <span className="text-sm text-red-500">
+                    FHE initialization failed. Please refresh the page.
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Voting section */}
           {status === "active" && !hasVoted && (
             <Card className="mb-8 glow-card bg-card/80 backdrop-blur-sm">
@@ -305,13 +346,20 @@ const VoteDetail = () => {
                   onClick={handleVote}
                   className="w-full mt-6 glow-border"
                   size="lg"
-                  disabled={isVoting || !isConnected || !selectedOption}
+                  disabled={isVoting || !isConnected || !selectedOption || fheStatus !== 'ready'}
                 >
                   {isVoting ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                       Encrypting & Submitting Vote...
                     </>
+                  ) : fheStatus === 'loading' ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Initializing FHE...
+                    </>
+                  ) : fheStatus === 'error' ? (
+                    "FHE Error - Refresh Page"
                   ) : !isConnected ? (
                     "Connect Wallet to Vote"
                   ) : (
