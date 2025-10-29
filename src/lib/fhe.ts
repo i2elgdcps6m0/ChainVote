@@ -15,8 +15,20 @@ declare global {
 let fheInstance: any = null;
 let initPromise: Promise<any> | null = null;
 let sdkPromise: Promise<any> | null = null;
+let initAttempts = 0;
+const MAX_INIT_ATTEMPTS = 3;
 
 const SDK_URL = 'https://cdn.zama.ai/relayer-sdk-js/0.2.0/relayer-sdk-js.js';
+
+/**
+ * Reset FHE instance (useful for error recovery)
+ */
+export const resetFHEInstance = () => {
+  console.log('🔄 Resetting FHE instance...');
+  fheInstance = null;
+  initPromise = null;
+  initAttempts = 0;
+};
 
 /**
  * Dynamically load Zama FHE SDK from CDN
@@ -126,11 +138,34 @@ export const initializeFHE = async (provider?: any, timeoutMs: number = 90000) =
   try {
     const result = await initPromise;
     initPromise = null;
+    initAttempts = 0; // Reset on success
     return result;
-  } catch (error) {
+  } catch (error: any) {
     initPromise = null;
     fheInstance = null;
-    throw error;
+    initAttempts++;
+
+    console.error(`❌ FHE initialization failed (attempt ${initAttempts}/${MAX_INIT_ATTEMPTS}):`, error);
+
+    // Add helpful error message
+    if (error.message?.includes('timeout')) {
+      throw new Error(
+        `FHE initialization timed out after ${timeoutMs/1000}s. ` +
+        `This usually happens due to slow network connection to Zama's servers. ` +
+        `Please try again or use a VPN.`
+      );
+    }
+
+    // Retry logic
+    if (initAttempts < MAX_INIT_ATTEMPTS) {
+      console.log(`🔄 Retrying FHE initialization in 2 seconds...`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      return initializeFHE(provider, timeoutMs);
+    }
+
+    throw new Error(
+      `FHE initialization failed after ${MAX_INIT_ATTEMPTS} attempts: ${error.message}`
+    );
   }
 };
 
