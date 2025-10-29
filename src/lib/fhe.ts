@@ -3,7 +3,8 @@ import { hexlify, getAddress } from "ethers";
 declare global {
   interface Window {
     relayerSDK?: {
-      initSDK: () => Promise<void>;
+      __initialized__?: boolean;
+      initSDK: () => Promise<boolean>;
       createInstance: (config: Record<string, unknown>) => Promise<any>;
       SepoliaConfig: Record<string, unknown>;
     };
@@ -14,55 +15,101 @@ declare global {
 
 let fheInstance: any = null;
 let initPromise: Promise<any> | null = null;
-let sdkPromise: Promise<any> | null = null;
-let initAttempts = 0;
-const MAX_INIT_ATTEMPTS = 3;
+let sdkPromise: Promise<void> | null = null;
 
 const SDK_URL = 'https://cdn.zama.ai/relayer-sdk-js/0.2.0/relayer-sdk-js.js';
 
 /**
- * Reset FHE instance (useful for error recovery)
+ * Reset FHE instance (useful for error recovery or wallet change)
  */
 export const resetFHEInstance = () => {
   console.log('🔄 Resetting FHE instance...');
   fheInstance = null;
   initPromise = null;
-  initAttempts = 0;
+};
+
+/**
+ * Check if relayerSDK is properly initialized
+ */
+const isFhevmInitialized = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  if (!window.relayerSDK) return false;
+  return window.relayerSDK.__initialized__ === true;
+};
+
+/**
+ * Validate relayerSDK structure
+ */
+const isValidRelayerSDK = (sdk: any): boolean => {
+  return (
+    sdk &&
+    typeof sdk === 'object' &&
+    typeof sdk.initSDK === 'function' &&
+    typeof sdk.createInstance === 'function' &&
+    sdk.SepoliaConfig &&
+    typeof sdk.SepoliaConfig === 'object'
+  );
 };
 
 /**
  * Dynamically load Zama FHE SDK from CDN
+ * Following official fhevm-react-template pattern
  */
-const loadSdk = async (): Promise<any> => {
+const loadSdk = async (): Promise<void> => {
   if (typeof window === 'undefined') {
     throw new Error('FHE SDK requires browser environment');
   }
 
+  // Check if SDK is already loaded and valid
   if (window.relayerSDK) {
-    return window.relayerSDK;
+    if (!isValidRelayerSDK(window.relayerSDK)) {
+      throw new Error('window.relayerSDK is invalid');
+    }
+    console.log('✅ SDK already loaded');
+    return;
   }
 
+  // Use singleton promise to prevent duplicate loading
   if (!sdkPromise) {
-    sdkPromise = new Promise((resolve, reject) => {
+    sdkPromise = new Promise<void>((resolve, reject) => {
+      // Check if script tag already exists
       const existing = document.querySelector(`script[src="${SDK_URL}"]`) as HTMLScriptElement | null;
       if (existing) {
-        existing.addEventListener('load', () => resolve(window.relayerSDK));
+        console.log('⏳ SDK script tag exists, waiting for load...');
+        const checkLoaded = () => {
+          if (window.relayerSDK && isValidRelayerSDK(window.relayerSDK)) {
+            resolve();
+          } else {
+            reject(new Error('SDK script exists but window.relayerSDK is invalid'));
+          }
+        };
+        existing.addEventListener('load', checkLoaded);
         existing.addEventListener('error', () => reject(new Error('Failed to load FHE SDK')));
         return;
       }
 
+      // Create and append new script tag to document.head (not body!)
       const script = document.createElement('script');
       script.src = SDK_URL;
+      script.type = 'text/javascript';
       script.async = true;
+
       script.onload = () => {
-        if (window.relayerSDK) {
-          resolve(window.relayerSDK);
+        if (window.relayerSDK && isValidRelayerSDK(window.relayerSDK)) {
+          console.log('✅ SDK loaded successfully');
+          resolve();
         } else {
-          reject(new Error('relayerSDK unavailable after load'));
+          reject(new Error('SDK loaded but window.relayerSDK is invalid'));
         }
       };
-      script.onerror = () => reject(new Error('Failed to load FHE SDK'));
-      document.body.appendChild(script);
+
+      script.onerror = () => {
+        reject(new Error(`Failed to load FHE SDK from ${SDK_URL}`));
+      };
+
+      // Append to head, not body (matches official template)
+      document.head.appendChild(script);
+      console.log('📦 Loading FHE SDK from CDN...');
     });
   }
 
@@ -70,16 +117,20 @@ const loadSdk = async (): Promise<any> => {
 };
 
 /**
- * Initialize FHE SDK with timeout and retry logic
+ * Initialize FHE SDK following official fhevm-react-template pattern
+ * Key improvements:
+ * - Checks __initialized__ flag to prevent re-initialization
+ * - Proper SDK validation
+ * - Cleaner instance lifecycle management
  */
-export const initializeFHE = async (provider?: any, timeoutMs: number = 90000) => {
-  // Return existing instance
+export const initializeFHE = async (provider?: any, timeoutMs: number = 60000) => {
+  // Return existing instance if available
   if (fheInstance) {
     console.log('🔄 Reusing existing FHE instance');
     return fheInstance;
   }
 
-  // Return ongoing initialization
+  // Return ongoing initialization promise
   if (initPromise) {
     console.log('⏳ Waiting for ongoing FHE initialization');
     return initPromise;
@@ -89,7 +140,7 @@ export const initializeFHE = async (provider?: any, timeoutMs: number = 90000) =
     throw new Error('FHE SDK requires browser environment');
   }
 
-  // Get Ethereum provider from multiple sources
+  // Get Ethereum provider from multiple sources (MetaMask, OKX, Coinbase)
   const ethereumProvider = provider ||
     window.ethereum ||
     (window as any).okxwallet?.provider ||
@@ -108,16 +159,29 @@ export const initializeFHE = async (provider?: any, timeoutMs: number = 90000) =
   // Create initialization promise with timeout
   initPromise = Promise.race([
     (async () => {
-      console.log('📦 Loading FHE SDK...');
-      const sdk = await loadSdk();
+      // Step 1: Load SDK script if not loaded
+      await loadSdk();
 
+      const sdk = window.relayerSDK;
       if (!sdk) {
-        throw new Error('FHE SDK not available');
+        throw new Error('SDK loaded but window.relayerSDK is undefined');
       }
 
-      console.log('🚀 Initializing FHE SDK...');
-      await sdk.initSDK();
+      // Step 2: Initialize SDK if not already initialized
+      if (!isFhevmInitialized()) {
+        console.log('🚀 Initializing FHE SDK...');
+        const initResult = await sdk.initSDK();
+        sdk.__initialized__ = initResult;
 
+        if (!initResult) {
+          throw new Error('SDK initSDK() returned false');
+        }
+        console.log('✅ SDK initialized');
+      } else {
+        console.log('✅ SDK already initialized');
+      }
+
+      // Step 3: Create FHE instance
       console.log('⚙️ Creating FHE instance...');
       const config = {
         ...sdk.SepoliaConfig,
@@ -125,7 +189,7 @@ export const initializeFHE = async (provider?: any, timeoutMs: number = 90000) =
       };
 
       const instance = await sdk.createInstance(config);
-      console.log('✅ FHE instance initialized for Sepolia');
+      console.log('✅ FHE instance created for Sepolia');
 
       fheInstance = instance;
       return instance;
@@ -138,34 +202,22 @@ export const initializeFHE = async (provider?: any, timeoutMs: number = 90000) =
   try {
     const result = await initPromise;
     initPromise = null;
-    initAttempts = 0; // Reset on success
     return result;
   } catch (error: any) {
     initPromise = null;
     fheInstance = null;
-    initAttempts++;
 
-    console.error(`❌ FHE initialization failed (attempt ${initAttempts}/${MAX_INIT_ATTEMPTS}):`, error);
+    console.error('❌ FHE initialization failed:', error);
 
-    // Add helpful error message
+    // Provide helpful error messages
     if (error.message?.includes('timeout')) {
       throw new Error(
         `FHE initialization timed out after ${timeoutMs/1000}s. ` +
-        `This usually happens due to slow network connection to Zama's servers. ` +
-        `Please try again or use a VPN.`
+        `This may be due to slow network connection. Please try again.`
       );
     }
 
-    // Retry logic
-    if (initAttempts < MAX_INIT_ATTEMPTS) {
-      console.log(`🔄 Retrying FHE initialization in 2 seconds...`);
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      return initializeFHE(provider, timeoutMs);
-    }
-
-    throw new Error(
-      `FHE initialization failed after ${MAX_INIT_ATTEMPTS} attempts: ${error.message}`
-    );
+    throw error;
   }
 };
 
