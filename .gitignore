@@ -1,0 +1,53 @@
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+
+# Testing
+coverage
+
+# Production
+build
+dist
+
+# Misc
+.DS_Store
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.swp
+*.swo
+*~
+
+# Hardhat
+deploy-contracts/cache
+deploy-contracts/artifacts
+deploy-contracts/node_modules
+deploy-contracts/.env
+deploy-contracts/deployment.json
+
+hardhat-contracts/cache
+hardhat-contracts/artifacts
+hardhat-contracts/node_modules
+hardhat-contracts/.env
+
+# Backup files
+*.bak
+*-old.tsx
+*-old.ts
+*-old.jsx
+*-old.js
