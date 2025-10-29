@@ -14,6 +14,48 @@ declare global {
 
 let fheInstance: any = null;
 let initPromise: Promise<any> | null = null;
+let sdkPromise: Promise<any> | null = null;
+
+const SDK_URL = 'https://cdn.zama.ai/relayer-sdk-js/0.2.0/relayer-sdk-js.js';
+
+/**
+ * Dynamically load Zama FHE SDK from CDN
+ */
+const loadSdk = async (): Promise<any> => {
+  if (typeof window === 'undefined') {
+    throw new Error('FHE SDK requires browser environment');
+  }
+
+  if (window.relayerSDK) {
+    return window.relayerSDK;
+  }
+
+  if (!sdkPromise) {
+    sdkPromise = new Promise((resolve, reject) => {
+      const existing = document.querySelector(`script[src="${SDK_URL}"]`) as HTMLScriptElement | null;
+      if (existing) {
+        existing.addEventListener('load', () => resolve(window.relayerSDK));
+        existing.addEventListener('error', () => reject(new Error('Failed to load FHE SDK')));
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = SDK_URL;
+      script.async = true;
+      script.onload = () => {
+        if (window.relayerSDK) {
+          resolve(window.relayerSDK);
+        } else {
+          reject(new Error('relayerSDK unavailable after load'));
+        }
+      };
+      script.onerror = () => reject(new Error('Failed to load FHE SDK'));
+      document.body.appendChild(script);
+    });
+  }
+
+  return sdkPromise;
+};
 
 /**
  * Initialize FHE SDK with timeout and retry logic
@@ -35,12 +77,6 @@ export const initializeFHE = async (provider?: any, timeoutMs: number = 90000) =
     throw new Error('FHE SDK requires browser environment');
   }
 
-  if (!window.relayerSDK) {
-    throw new Error(
-      "Zama FHE SDK not loaded. Make sure the SDK script is included in index.html"
-    );
-  }
-
   // Get Ethereum provider from multiple sources
   const ethereumProvider = provider ||
     window.ethereum ||
@@ -60,7 +96,12 @@ export const initializeFHE = async (provider?: any, timeoutMs: number = 90000) =
   // Create initialization promise with timeout
   initPromise = Promise.race([
     (async () => {
-      const sdk = window.relayerSDK!;
+      console.log('📦 Loading FHE SDK...');
+      const sdk = await loadSdk();
+
+      if (!sdk) {
+        throw new Error('FHE SDK not available');
+      }
 
       console.log('🚀 Initializing FHE SDK...');
       await sdk.initSDK();
