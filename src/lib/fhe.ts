@@ -13,9 +13,23 @@ declare global {
 }
 
 let fheInstance: any = null;
+let initPromise: Promise<any> | null = null;
 
-export const initializeFHE = async (provider?: any) => {
-  if (fheInstance) return fheInstance;
+/**
+ * Initialize FHE SDK with timeout and retry logic
+ */
+export const initializeFHE = async (provider?: any, timeoutMs: number = 30000) => {
+  // Return existing instance
+  if (fheInstance) {
+    console.log('🔄 Reusing existing FHE instance');
+    return fheInstance;
+  }
+
+  // Return ongoing initialization
+  if (initPromise) {
+    console.log('⏳ Waiting for ongoing FHE initialization');
+    return initPromise;
+  }
 
   if (typeof window === 'undefined') {
     throw new Error('FHE SDK requires browser environment');
@@ -28,7 +42,6 @@ export const initializeFHE = async (provider?: any) => {
   }
 
   // Get Ethereum provider from multiple sources
-  // Priority: passed provider > window.ethereum > window.okxwallet > window.coinbaseWalletExtension
   const ethereumProvider = provider ||
     window.ethereum ||
     (window as any).okxwallet?.provider ||
@@ -42,22 +55,42 @@ export const initializeFHE = async (provider?: any) => {
   console.log('🔌 Using Ethereum provider:', {
     isOKX: !!(window as any).okxwallet,
     isMetaMask: !!(window.ethereum as any)?.isMetaMask,
-    provider: ethereumProvider
   });
 
-  const sdk = window.relayerSDK;
-  await sdk.initSDK();
+  // Create initialization promise with timeout
+  initPromise = Promise.race([
+    (async () => {
+      const sdk = window.relayerSDK!;
 
-  // Use the built-in SepoliaConfig from the SDK
-  const config = {
-    ...sdk.SepoliaConfig,
-    network: ethereumProvider,
-  };
+      console.log('🚀 Initializing FHE SDK...');
+      await sdk.initSDK();
 
-  fheInstance = await sdk.createInstance(config);
-  console.log('✅ FHE instance initialized for Sepolia');
+      console.log('⚙️ Creating FHE instance...');
+      const config = {
+        ...sdk.SepoliaConfig,
+        network: ethereumProvider,
+      };
 
-  return fheInstance;
+      const instance = await sdk.createInstance(config);
+      console.log('✅ FHE instance initialized for Sepolia');
+
+      fheInstance = instance;
+      return instance;
+    })(),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`FHE initialization timeout after ${timeoutMs}ms`)), timeoutMs)
+    ),
+  ]);
+
+  try {
+    const result = await initPromise;
+    initPromise = null;
+    return result;
+  } catch (error) {
+    initPromise = null;
+    fheInstance = null;
+    throw error;
+  }
 };
 
 /**
@@ -71,17 +104,32 @@ export const encryptVote = async (
   voteValue: bigint,
   contractAddress: string,
   userAddress: string,
-  provider?: any
+  provider?: any,
+  timeoutMs: number = 45000
 ): Promise<{
   encryptedVote: `0x${string}`;
   proof: `0x${string}`;
 }> => {
+  console.log('🔐 Starting vote encryption...');
+
   const fhe = await initializeFHE(provider);
   const checksumAddress = getAddress(contractAddress);
 
+  console.log('📝 Creating encrypted input...');
   const input = fhe.createEncryptedInput(checksumAddress, userAddress);
   input.add64(voteValue); // euint64 for vote value
-  const { handles, inputProof } = await input.encrypt();
+
+  console.log('🔒 Encrypting vote...');
+
+  // Add timeout to encryption process
+  const encryptionPromise = input.encrypt();
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`Vote encryption timeout after ${timeoutMs}ms`)), timeoutMs)
+  );
+
+  const { handles, inputProof } = await Promise.race([encryptionPromise, timeoutPromise]) as any;
+
+  console.log('✅ Vote encrypted successfully');
 
   return {
     encryptedVote: hexlify(handles[0]) as `0x${string}`,
